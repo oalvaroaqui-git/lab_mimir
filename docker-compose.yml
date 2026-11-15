@@ -21,11 +21,27 @@ services:
     depends_on:
       - mimir
 
+  app:
+    build: ./app
+    container_name: shop-app
+    ports:
+      - "8000:8000"
+
+  loadgen:
+    build: ./app
+    container_name: loadgen
+    command: ["python", "loadgen.py"]
+    environment:
+      - APP_URL=http://app:8000
+    depends_on:
+      - app
+
   grafana:
     image: grafana/grafana:11.2.0
     container_name: grafana
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3000:3000"
     environment:
