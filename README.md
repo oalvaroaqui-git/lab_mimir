@@ -2,6 +2,8 @@
 
 Laboratório local de observabilidade com Prometheus, Grafana Mimir e Grafana.
 
+📝 Post com o passo a passo e as armadilhas que encontrei no caminho: [Lab Grafana Mimir com Prometheus e Docker Compose](https://oalvaroaqui.xyz/posts/lab-grafana-mimir-prometheus-docker-compose/)
+
 ## Arquitetura
 
 ```
@@ -22,6 +24,7 @@ Shop App (FastAPI) --scrape--> Prometheus --remote_write--> Mimir --datasource--
 docker-compose.yml
 app/main.py                                # API FastAPI instrumentada (Shop App)
 app/loadgen.py                             # gerador de carga
+app/Dockerfile                             # imagem usada pela app e pelo loadgen
 mimir/mimir.yaml                           # config do Mimir (single-binary, filesystem)
 prometheus/prometheus.yml                  # scrape configs + remote_write para o Mimir
 grafana/provisioning/datasources/mimir.yaml # datasource do Grafana apontando pro Mimir
@@ -91,7 +94,7 @@ docker compose down -v
 
 ### 1. Prometheus coletando métricas
 
-Em http://localhost:9090/targets, os dois jobs (`prometheus` e `mimir`) devem aparecer com estado **UP**:
+Em http://localhost:9090/targets, os três jobs (`shop-app`, `prometheus` e `mimir`) devem aparecer com estado **UP**:
 
 ![Targets do Prometheus](docs/images/prometheus-targets.png)
 
@@ -103,9 +106,11 @@ Em http://localhost:3000/connections/datasources, o datasource **Mimir** aparece
 
 ### 3. Métricas chegando no Mimir via remote_write
 
-No Explore do Grafana, consultando `up` pelo datasource Mimir, as duas séries aparecem com valor `1` — ou seja, as métricas coletadas pelo Prometheus estão sendo gravadas no Mimir e consultadas de lá:
+No Explore do Grafana, consultando pelo datasource Mimir, as métricas da Shop App aparecem — ou seja, saíram da aplicação, foram coletadas pelo Prometheus, atravessaram o `remote_write` e estão sendo servidas pelo Mimir:
 
-![Consulta up no Explore](docs/images/grafana-explore.png)
+![Requisições por endpoint no Explore](docs/images/grafana-explore.png)
+
+Repare na legenda: o endpoint aparece como `/products/{product_id}`, e não como `/products/1`, `/products/2`… — a app usa o template da rota como label, evitando explosão de cardinalidade.
 
 Também dá pra validar direto pela API do Mimir:
 
@@ -152,11 +157,15 @@ curl -s http://localhost:8000/metrics | grep ^shop_
 
 ```bash
 # requisições/s por endpoint
-curl -s 'http://localhost:9009/prometheus/api/v1/query?query=sum by (endpoint) (rate(shop_http_requests_total[1m]))'
+curl -sG 'http://localhost:9009/prometheus/api/v1/query' \
+  --data-urlencode 'query=sum by (endpoint) (rate(shop_http_requests_total[1m]))'
 
 # latência p95
-curl -s 'http://localhost:9009/prometheus/api/v1/query?query=histogram_quantile(0.95, sum by (le) (rate(shop_http_request_duration_seconds_bucket[5m])))'
+curl -sG 'http://localhost:9009/prometheus/api/v1/query' \
+  --data-urlencode 'query=histogram_quantile(0.95, sum by (le) (rate(shop_http_request_duration_seconds_bucket[5m])))'
 ```
+
+> O `-G` com `--data-urlencode` é necessário para queries com espaços e parênteses: jogadas direto na query string, elas geram uma URL inválida e o `curl` devolve resposta vazia, sem erro explicando o motivo.
 
 **3. No Explore do Grafana** — http://localhost:3000/explore com o datasource **Mimir**. Queries úteis:
 
